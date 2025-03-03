@@ -44,6 +44,24 @@ def load_model(filename: str) -> dict:
     with open(filename, 'rb') as file:
         return pickle.load(file)
 
+def augment_model(model: dict, filename: str, multiplier: int) -> dict:
+    '''Augment the model with a local dictionary'''
+    # Create a new weighting model from the file
+    augmentation_model = build_model(filename)
+    # Multiply the weights by the multiplier
+    for char, next_chars in augmentation_model.items():
+        for next_char, weight in next_chars.items():
+            augmentation_model[char][next_char] *= multiplier
+    # Merge the models
+    for char, next_chars in augmentation_model.items():
+        if char not in model:
+            model[char] = {}
+        for next_char, weight in next_chars.items():
+            if next_char not in model[char]:
+                model[char][next_char] = 0
+            model[char][next_char] += weight
+    return model
+
 def report(model: dict, filename: str) -> None:
     '''Print a weights report as csv file'''
     with open(filename, 'wt', encoding='utf8', errors='ignore') as file:
@@ -54,7 +72,7 @@ def report(model: dict, filename: str) -> None:
 
 def strength(model: dict, password: str) -> float:
     '''Return the strength of the password. This is -log2 of the product of the probabilities of each character'''
-    strength = 1
+    strength_val = 1
     for i in range(len(password) - 1):
         char = password[i]
         next_char = password[i + 1]
@@ -63,10 +81,9 @@ def strength(model: dict, password: str) -> float:
             prob = 0.000000001
         else:
             prob = model[char][next_char]
-        strength *= prob
-    strength = -math.log(strength, 2)
-    
-    return strength
+        strength_val *= prob
+    strength_val = -math.log(strength_val, 2)
+    return strength_val
 
 def strengths(model: dict, passwords: list) -> list:
     '''Return a list of the strengths of a list of passwords'''
@@ -129,10 +146,14 @@ def main():
         sub_parser.add_argument('model_file', type=str, help='Model file to read')
         sub_parser.add_argument('password', nargs='+', type=str, help='Password to analyze')
         sub_parser.add_argument('--detail', action='store_true', help='Show detailed analysis')
+        sub_parser.add_argument('--augment', type=str, help='Augment the strength meter with local dictionary')
+        sub_parser.add_argument('--augment-multiplier', type=float, default=0.1, help='Multiplier weighting to apply to augmented dictionary')
         args = sub_parser.parse_args(sys.argv[2:])
         if args.detail and len(args.password) > 1:
             raise ValueError('Cannot show detailed analysis for multiple passwords')
         model = load_model(args.model_file)
+        if args.augment:
+            model = augment_model(model, args.augment, args.augment_multiplier)
         for password in args.password:
             passowrd_strength = strength(model, password)
             print(f'{password}: {passowrd_strength:.2f}')
