@@ -6,6 +6,14 @@ import pprint
 import random
 import sys
 
+strength_lookup = {
+    00.0: (0, 'Very weak'),
+    30.0: (1, 'Weak'),
+    60.0: (2, 'Moderate'),
+    75.0: (3, 'Strong'),
+    90.0: (4, 'Very strong'),
+}
+
 def build_model(filename: str) -> dict:
     '''Build a Markov model from a file of newline-separated passwords'''
     model = {}
@@ -85,6 +93,14 @@ def strength(model: dict, password: str, length_adjust: bool = False) -> float:
     strength_val = -math.log(strength_val, 2)
     return strength_val
 
+def score(strength: float) -> tuple:
+    '''Return the strength lookup value for a given strength'''
+    result = strength_lookup[0.0]
+    for lookup_strength, lookup_value in strength_lookup.items():
+        if strength >= lookup_strength:
+            result = lookup_value
+    return result
+
 def strengths(model: dict, passwords: list) -> list:
     '''Return a list of the strengths of a list of passwords'''
     return [strength(model, password) for password in passwords]
@@ -155,7 +171,8 @@ def main():
             model = augment_model(model, args.augment, args.augment_multiplier)
         for password in args.password:
             password_strength = strength(model, password, args.length_adjust)
-            print(f'{password}: {password_strength:.5f}')
+            scoreval, description = score(password_strength)
+            print(f'{password}: {password_strength:.5f}, {scoreval} ({description})')
             if args.detail:
                 for bigram, probability in analyse(model, password):
                     print(f'  {bigram} {probability:.5f}')
