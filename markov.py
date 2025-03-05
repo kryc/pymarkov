@@ -145,6 +145,7 @@ def main():
         sub_parser = argparse.ArgumentParser(description='Password Markov model analyze')
         sub_parser.add_argument('model_file', type=str, help='Model file to read')
         sub_parser.add_argument('password', nargs='+', type=str, help='Password to analyze')
+        sub_parser.add_argument('--length-adjust', action='store_true', help='Adjust strength by length')
         sub_parser.add_argument('--detail', action='store_true', help='Show detailed analysis')
         sub_parser.add_argument('--augment', type=str, help='Augment the strength meter with local dictionary')
         sub_parser.add_argument('--augment-multiplier', type=float, default=0.1, help='Multiplier weighting to apply to augmented dictionary')
@@ -153,7 +154,7 @@ def main():
         if args.augment:
             model = augment_model(model, args.augment, args.augment_multiplier)
         for password in args.password:
-            password_strength = strength(model, password)
+            password_strength = strength(model, password, args.length_adjust)
             print(f'{password}: {password_strength:.5f}')
             if args.detail:
                 for bigram, probability in analyse(model, password):
