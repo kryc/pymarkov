@@ -70,7 +70,7 @@ def report(model: dict, filename: str) -> None:
             for next_char, prob in next_chars.items():
                 writer.writerow([char, next_char, prob])
 
-def strength(model: dict, password: str) -> float:
+def strength(model: dict, password: str, length_adjust: bool = False) -> float:
     '''Return the strength of the password. This is -log2 of the product of the probabilities of each character'''
     strength_val = 1
     for i in range(len(password) - 1):
@@ -81,7 +81,7 @@ def strength(model: dict, password: str) -> float:
             prob = 0.000000001
         else:
             prob = model[char][next_char]
-        strength_val *= prob
+        strength_val = strength_val * prob * pow(1.1, i+1) if length_adjust else strength_val * prob
     strength_val = -math.log(strength_val, 2)
     return strength_val
 
@@ -149,16 +149,15 @@ def main():
         sub_parser.add_argument('--augment', type=str, help='Augment the strength meter with local dictionary')
         sub_parser.add_argument('--augment-multiplier', type=float, default=0.1, help='Multiplier weighting to apply to augmented dictionary')
         args = sub_parser.parse_args(sys.argv[2:])
-        if args.detail and len(args.password) > 1:
-            raise ValueError('Cannot show detailed analysis for multiple passwords')
         model = load_model(args.model_file)
         if args.augment:
             model = augment_model(model, args.augment, args.augment_multiplier)
         for password in args.password:
-            passowrd_strength = strength(model, password)
-            print(f'{password}: {passowrd_strength:.2f}')
+            password_strength = strength(model, password)
+            print(f'{password}: {password_strength:.5f}')
             if args.detail:
-                pprint.pprint(analyse(model, args.password))
+                for bigram, probability in analyse(model, password):
+                    print(f'  {bigram} {probability:.5f}')
     elif args.operation == 'generate':
         # Create new arg parser for remainder of arguments
         sub_parser = argparse.ArgumentParser(description='Password Markov model generate')
