@@ -77,19 +77,40 @@ def report(model: dict, filename: str) -> None:
             for next_char, prob in next_chars.items():
                 writer.writerow([char, next_char, prob])
 
-def largest_repeating_substring(s: str) -> str:
-    '''Find the largest repeating substring in the given string'''
-    for length in range(len(s) // 2, 0, -1):
-        if len(s) % length == 0:
-            substring = s[:length]
-            if substring * (len(s) // length) == s:
-                return substring
-    return s
+def shortest_repeating_substring(password: str) -> str:
+    '''Find the shortest repeating substring in the given string'''
+    result = None
+    for length in range(len(password) // 2, 0, -1):
+        if len(password) % length == 0:
+            substring = password[:length]
+            if substring * (len(password) // length) == password:
+                result = password[:length]
+    return result or password
+
+def flatten_repeating_substrings(password: str) -> str:
+    '''Flatten repeated whole substrings in the given string'''
+    len(password)
+    i = 0
+    result = []
+    while i < len(password):
+        for length in range(1, len(password) - i + 1):
+            substring = password[i:i + length]
+            repeat_count = 1
+            while i + repeat_count * length < len(password) and password[i:i + length] == password[i + repeat_count * length:i + (repeat_count + 1) * length]:
+                repeat_count += 1
+            if repeat_count > 1:
+                result.append(substring)
+                i += repeat_count * length
+                break
+        else:
+            result.append(password[i])
+            i += 1
+    return ''.join(result)
 
 def _strength(model: dict, password: str, length_adjust: bool = False) -> float:
     '''Return the strength of the password. This is -log2 of the product of the probabilities of each character'''
     # Check for repeating substrings
-    password = largest_repeating_substring(password)
+    password = flatten_repeating_substrings(password)
     probabilities = []
     strength_val = 1
     for i in range(len(password) - 1):
