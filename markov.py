@@ -2,7 +2,6 @@ import argparse
 import csv
 import math
 import pickle
-import pprint
 import random
 import sys
 
@@ -78,8 +77,20 @@ def report(model: dict, filename: str) -> None:
             for next_char, prob in next_chars.items():
                 writer.writerow([char, next_char, prob])
 
-def strength(model: dict, password: str, length_adjust: bool = False) -> float:
+def largest_repeating_substring(s: str) -> str:
+    '''Find the largest repeating substring in the given string'''
+    for length in range(len(s) // 2, 0, -1):
+        if len(s) % length == 0:
+            substring = s[:length]
+            if substring * (len(s) // length) == s:
+                return substring
+    return s
+
+def _strength(model: dict, password: str, length_adjust: bool = False) -> float:
     '''Return the strength of the password. This is -log2 of the product of the probabilities of each character'''
+    # Check for repeating substrings
+    password = largest_repeating_substring(password)
+    probabilities = []
     strength_val = 1
     for i in range(len(password) - 1):
         char = password[i]
@@ -90,8 +101,19 @@ def strength(model: dict, password: str, length_adjust: bool = False) -> float:
         else:
             prob = model[char][next_char]
         strength_val = strength_val * prob * pow(1.1, i+1) if length_adjust else strength_val * prob
+        probabilities.append((f'{char}{next_char}', prob))
     strength_val = -math.log(strength_val, 2)
+    return strength_val, probabilities
+
+def strength(model: dict, password: str, length_adjust: bool = False) -> float:
+    '''Return the strength of the password. This is -log2 of the product of the probabilities of each character'''
+    strength_val, _ = _strength(model, password, length_adjust)
     return strength_val
+
+def analyse(model: dict, password: str, length_adjust: bool = False) -> list:
+    '''Return a list of the probabilities of a password.'''
+    _, probabilities = _strength(model, password, length_adjust)
+    return probabilities
 
 def score(strength: float) -> tuple:
     '''Return the strength lookup value for a given strength'''
@@ -104,20 +126,6 @@ def score(strength: float) -> tuple:
 def strengths(model: dict, passwords: list) -> list:
     '''Return a list of the strengths of a list of passwords'''
     return [strength(model, password) for password in passwords]
-
-def analyse(model: dict, password: str) -> list:
-    '''Return a list of the probabilities of a password.'''
-    probabilities = []
-    for i in range(len(password) - 1):
-        char = password[i]
-        next_char = password[i + 1]
-        if char not in model or next_char not in model[char]:
-            # Use a very very small number
-            prob = 0.00000000001
-        else:
-            prob = model[char][next_char]
-        probabilities.append((f'{char}{next_char}', prob))
-    return probabilities
 
 def generate_text(model: dict, length: int, start: str) -> str:
     '''Generate text of a given length using the Markov model'''
