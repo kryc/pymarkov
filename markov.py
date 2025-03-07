@@ -107,10 +107,10 @@ def flatten_repeating_substrings(password: str) -> str:
             i += 1
     return ''.join(result)
 
-def _strength(model: dict, password: str, length_adjust: bool = False) -> float:
+def _strength(model: dict, password: str, length_adjust: bool = False, fold: bool = True) -> float:
     '''Return the strength of the password. This is -log2 of the product of the probabilities of each character'''
     # Check for repeating substrings
-    password = flatten_repeating_substrings(password)
+    password = flatten_repeating_substrings(password) if fold else password
     probabilities = []
     strength_val = 1
     for i in range(len(password) - 1):
@@ -191,6 +191,7 @@ def main():
         sub_parser.add_argument('model_file', type=str, help='Model file to read')
         sub_parser.add_argument('password', nargs='+', type=str, help='Password to analyze')
         sub_parser.add_argument('--length-adjust', action='store_true', help='Adjust strength by length')
+        sub_parser.add_argument('--no-fold', action='store_true', help='Do not fold repeating substrings')
         sub_parser.add_argument('--detail', action='store_true', help='Show detailed analysis')
         sub_parser.add_argument('--augment', type=str, help='Augment the strength meter with local dictionary')
         sub_parser.add_argument('--augment-multiplier', type=float, default=0.1, help='Multiplier weighting to apply to augmented dictionary')
@@ -199,7 +200,7 @@ def main():
         if args.augment:
             model = augment_model(model, args.augment, args.augment_multiplier)
         for password in args.password:
-            password_strength = strength(model, password, args.length_adjust)
+            password_strength = strength(model, password, args.length_adjust, not args.no_fold)
             scoreval, description = score(password_strength)
             print(f'{password}: {password_strength:.5f}, {scoreval} ({description})')
             if args.detail:
