@@ -88,12 +88,11 @@ def shortest_repeating_substring(password: str) -> str:
     return result or password
 
 def flatten_repeating_substrings(password: str) -> str:
-    '''Flatten repeated whole substrings in the given string'''
-    len(password)
-    i = 0
+    '''Flatten repeated whole substrings in the given string with a minimum length of two characters'''
     result = []
+    i = 0
     while i < len(password):
-        for length in range(1, len(password) - i + 1):
+        for length in range(2, len(password) - i + 1):  # Start length from 2
             substring = password[i:i + length]
             repeat_count = 1
             while i + repeat_count * length < len(password) and password[i:i + length] == password[i + repeat_count * length:i + (repeat_count + 1) * length]:
@@ -126,14 +125,14 @@ def _strength(model: dict, password: str, length_adjust: bool = False, fold: boo
     strength_val = -math.log(strength_val, 2)
     return strength_val, probabilities
 
-def strength(model: dict, password: str, length_adjust: bool = False) -> float:
+def strength(model: dict, password: str, length_adjust: bool = False, fold: bool = True) -> float:
     '''Return the strength of the password. This is -log2 of the product of the probabilities of each character'''
-    strength_val, _ = _strength(model, password, length_adjust)
+    strength_val, _ = _strength(model, password, length_adjust, fold)
     return strength_val
 
-def analyse(model: dict, password: str, length_adjust: bool = False) -> list:
+def analyse(model: dict, password: str, length_adjust: bool = False, fold: bool = True) -> list:
     '''Return a list of the probabilities of a password.'''
-    _, probabilities = _strength(model, password, length_adjust)
+    _, probabilities = _strength(model, password, length_adjust, fold)
     return probabilities
 
 def score(strength: float) -> tuple:
