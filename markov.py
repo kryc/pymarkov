@@ -87,6 +87,7 @@ def build_model_hibp(pwnedpasswords: str, wordlist: str) -> dict:
     # Step 1 we read the wordlist and hash all of the words with sha1
     print('Building lookup table from wordlist...')
     lookup_table = _build_wordlist_lookup_table(wordlist)
+    # Print first three entries
     print('Lookup table built with', len(lookup_table), 'entries')
     # Step 2 we read the pwnedpasswords file and build a model
     # The pwnedpasswords file is a list of sha1 hashes of passwords and their count
@@ -94,12 +95,14 @@ def build_model_hibp(pwnedpasswords: str, wordlist: str) -> dict:
     #   <sha1 hash>:<count>
     model = {}
     print('Building model from pwnedpasswords...')
+    number_missing = 0
     with open(pwnedpasswords, 'rt', encoding='utf8', errors='ignore') as file:
         for line in file:
             line = line.strip()
             if not line:
                 continue
             hash_str, count_str = line.split(':')
+            assert len(hash_str) == 40
             count = int(count_str)
             hash_bytes = bytes.fromhex(hash_str)
             # Check if the hash is in the lookup table
@@ -107,6 +110,11 @@ def build_model_hibp(pwnedpasswords: str, wordlist: str) -> dict:
                 password = lookup_table[hash_bytes]
                 # Build the model from the password
                 _add_word_to_model(model, password, count)
+            else:
+                # print(f'Hash not found in lookup table: {hash_str}')
+                number_missing += 1
+    print('Model built with', len(model), 'entries')
+    print('Number of missing hashes:', number_missing)
     # Convert counts to probabilities weights
     model = _convert_counts_to_weights(model)
     return model
