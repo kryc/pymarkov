@@ -1,8 +1,12 @@
 import argparse
 import csv
+import hashlib
+import itertools
 import math
+import multiprocessing
 import pickle
 import random
+import re
 import sys
 
 strength_lookup = {
@@ -13,6 +17,27 @@ strength_lookup = {
     90.0: (4, 'Very strong'),
 }
 
+HEX_REGEX = re.compile(r'^\$HEX\[(?:[0-9A-Fa-f]{2})+\]$')
+
+def _convert_counts_to_weights(model: dict) -> dict:
+    '''Convert counts to weights in the model'''
+    for char, next_chars in model.items():
+        total = sum(next_chars.values())
+        for next_char in next_chars:
+            next_chars[next_char] /= total
+    return model
+
+def _add_word_to_model(model: dict, word: str, weight: int) -> None:
+    '''Add a word to the model, updating the counts of next characters'''
+    for i in range(len(word) - 1):
+        char = word[i]
+        next_char = word[i + 1]
+        if char not in model:
+            model[char] = {}
+        if next_char not in model[char]:
+            model[char][next_char] = 0
+        model[char][next_char] += weight
+
 def build_model(filename: str) -> dict:
     '''Build a Markov model from a file of newline-separated passwords'''
     model = {}
@@ -20,25 +45,70 @@ def build_model(filename: str) -> dict:
     # of the next character
     with open(filename, 'rt', encoding='utf8', errors='ignore') as file:
         for line in file:
+            line = line.rstrip('\n')
+            if not line:
+                continue
+            _add_word_to_model(model, line, 1)
+    # Convert counts to probabilities weights
+    model = _convert_counts_to_weights(model)
+    return model
+
+def _hashing_worker(words: list) -> tuple:
+    '''Worker function to hash a word and return its SHA1 digest and the word itself'''
+    hashes = []
+    for word in words:
+        word = word.rstrip('\n')
+        if not word:
+            continue
+        # Decode $HEX[...] encodings
+        if re.match(HEX_REGEX, word):
+            word_bytes = bytes.fromhex(word[5:-1])
+            try:
+                word = word_bytes.decode('utf8')
+            except UnicodeDecodeError:
+                continue
+        # Hash the string and return it
+        hash_digest = hashlib.sha1(word.encode('utf8')).digest()
+        hashes.append((hash_digest, word,))
+    return hashes
+
+def _build_wordlist_lookup_table(wordlist: str) -> dict:
+    '''Build a lookup table from a wordlist file'''
+    lookup_table = {}
+    with open(wordlist, 'rt', encoding='utf8', errors='ignore') as file:
+        with multiprocessing.Pool() as pool:
+            for values in pool.imap_unordered(_hashing_worker, itertools.batched(file, 8192)):
+                for hash_digest, word in values:
+                    lookup_table[hash_digest] = word
+    return lookup_table
+
+def build_model_hibp(pwnedpasswords: str, wordlist: str) -> dict:
+    '''Build a Markov model from the Have I Been Pwned pwnedpasswords list and a wordlist file'''
+    # Step 1 we read the wordlist and hash all of the words with sha1
+    print('Building lookup table from wordlist...')
+    lookup_table = _build_wordlist_lookup_table(wordlist)
+    print('Lookup table built with', len(lookup_table), 'entries')
+    # Step 2 we read the pwnedpasswords file and build a model
+    # The pwnedpasswords file is a list of sha1 hashes of passwords and their count
+    # The format is:
+    #   <sha1 hash>:<count>
+    model = {}
+    print('Building model from pwnedpasswords...')
+    with open(pwnedpasswords, 'rt', encoding='utf8', errors='ignore') as file:
+        for line in file:
             line = line.strip()
             if not line:
                 continue
-            for i in range(len(line) - 1):
-                char = line[i]
-                # Ignore NUL characters
-                if char == '\0':
-                    continue
-                next_char = line[i + 1]
-                if char not in model:
-                    model[char] = {}
-                if next_char not in model[char]:
-                    model[char][next_char] = 0
-                model[char][next_char] += 1
+            hash_str, count_str = line.split(':')
+            count = int(count_str)
+            hash_bytes = bytes.fromhex(hash_str)
+            # Check if the hash is in the lookup table
+            if hash_bytes in lookup_table:
+                password = lookup_table[hash_bytes]
+                # Build the model from the password
+                _add_word_to_model(model, password, count)
     # Convert counts to probabilities weights
-    for char, next_chars in model.items():
-        total = sum(next_chars.values())
-        for next_char in next_chars:
-            next_chars[next_char] /= total
+    model = _convert_counts_to_weights(model)
     return model
 
 def save_model(model: dict, filename: str) -> None:
@@ -165,7 +235,7 @@ def generate_text(model: dict, length: int, start: str) -> str:
 def main():
     '''Main function'''
     parser = argparse.ArgumentParser(description='Password Markov model analysis')
-    parser.add_argument('operation', type=str, choices=('build', 'report', 'strength', 'generate',), help='Action to perform')
+    parser.add_argument('operation', type=str, choices=('build', 'buildhibp', 'report', 'strength', 'generate',), help='Action to perform')
     args = parser.parse_args(sys.argv[1:2])
 
     if args.operation == 'build':
@@ -175,6 +245,15 @@ def main():
         sub_parser.add_argument('model_file', type=str, help='Model file to write')
         args = sub_parser.parse_args(sys.argv[2:])
         model = build_model(args.filename)
+        save_model(model, args.model_file)
+    elif args.operation == 'buildhibp':
+        # Create new arg parser for remainder of arguments
+        sub_parser = argparse.ArgumentParser(description='Password Markov model build from Have I Been Pwned pwnedpasswords list')
+        sub_parser.add_argument('pwnedpasswords', type=str, help='Pwned passwords file to read')
+        sub_parser.add_argument('wordlist', type=str, help='Wordlist file to perform lookups')
+        sub_parser.add_argument('model_file', type=str, help='Model file to write')
+        args = sub_parser.parse_args(sys.argv[2:])
+        model = build_model_hibp(args.pwnedpasswords, args.wordlist)
         save_model(model, args.model_file)
     elif args.operation == 'report':
         # Create new arg parser for remainder of arguments
