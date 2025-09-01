@@ -64,6 +64,14 @@ def build_model(filename: str) -> dict:
             line = line.rstrip('\n')
             if not line:
                 continue
+            # Decode $HEX[...] encodings
+            if re.match(HEX_REGEX, word):
+                word_bytes = bytes.fromhex(word[5:-1])
+                try:
+                    word = word_bytes.decode('utf8')
+                except UnicodeDecodeError:
+                    skipped += 1
+                    continue
             # Check if the word is printable UTF-8
             if not _is_printable_utf8(line):
                 continue
