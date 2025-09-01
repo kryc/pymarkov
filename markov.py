@@ -8,6 +8,7 @@ import pickle
 import random
 import re
 import sys
+import unicodedata
 
 strength_lookup = {
     00.0: (0, 'Very weak'),
@@ -21,7 +22,7 @@ HEX_REGEX = re.compile(r'^\$HEX\[(?:[0-9A-Fa-f]{2})+\]$')
 
 def _convert_counts_to_weights(model: dict) -> dict:
     '''Convert counts to weights in the model'''
-    for char, next_chars in model.items():
+    for _, next_chars in model.items():
         total = sum(next_chars.values())
         for next_char in next_chars:
             next_chars[next_char] /= total
@@ -38,6 +39,21 @@ def _add_word_to_model(model: dict, word: str, weight: int) -> None:
             model[char][next_char] = 0
         model[char][next_char] += weight
 
+def _is_printable_utf8(word: str) -> bool:
+    '''Check if a string is printable UTF-8'''
+    for codepoint in map(ord, word):
+        if (
+            codepoint <= 0x1F or codepoint == 0x7F or                      # ASCII control
+            0x80 <= codepoint <= 0x9F or                                   # C1 control
+            0xD800 <= codepoint <= 0xDFFF or                               # Surrogates
+            codepoint in {0xFFFE, 0xFFFF} or                               # Noncharacters
+            0xE000 <= codepoint <= 0xF8FF or                               # BMP Private Use
+            0xF0000 <= codepoint <= 0xFFFFD or                             # SPUA-A
+            0x100000 <= codepoint <= 0x10FFFD                              # SPUA-B
+        ):
+            return False
+    return True
+
 def build_model(filename: str) -> dict:
     '''Build a Markov model from a file of newline-separated passwords'''
     model = {}
@@ -48,6 +64,11 @@ def build_model(filename: str) -> dict:
             line = line.rstrip('\n')
             if not line:
                 continue
+            # Check if the word is printable UTF-8
+            if not _is_printable_utf8(line):
+                continue
+            # Normalize the word to NFC
+            line = unicodedata.normalize('NFC', line)
             _add_word_to_model(model, line, 1)
     # Convert counts to probabilities weights
     model = _convert_counts_to_weights(model)
@@ -56,9 +77,11 @@ def build_model(filename: str) -> dict:
 def _hashing_worker(words: list) -> tuple:
     '''Worker function to hash a word and return its SHA1 digest and the word itself'''
     hashes = []
+    skipped = 0
     for word in words:
         word = word.rstrip('\n')
         if not word:
+            skipped += 1
             continue
         # Decode $HEX[...] encodings
         if re.match(HEX_REGEX, word):
@@ -66,33 +89,41 @@ def _hashing_worker(words: list) -> tuple:
             try:
                 word = word_bytes.decode('utf8')
             except UnicodeDecodeError:
+                skipped += 1
                 continue
+        # Skip non-printable UTF-8 words
+        if not _is_printable_utf8(word):
+            skipped += 1
+            continue
         # Hash the string and return it
         hash_digest = hashlib.sha1(word.encode('utf8')).digest()
         hashes.append((hash_digest, word,))
-    return hashes
+    return hashes, skipped
 
-def _build_wordlist_lookup_table(wordlist: str) -> dict:
+def _build_wordlist_lookup_table(wordlist: str, threads: int) -> dict:
     '''Build a lookup table from a wordlist file'''
     lookup_table = {}
+    skipped = 0
     with open(wordlist, 'rt', encoding='utf8', errors='ignore') as file:
-        with multiprocessing.Pool() as pool:
-            for values in pool.imap_unordered(_hashing_worker, itertools.batched(file, 8192)):
+        with multiprocessing.Pool(threads) as pool:
+            for values, skipped_block in pool.imap_unordered(_hashing_worker, itertools.batched(file, 8192)):
+                skipped += skipped_block
                 for hash_digest, word in values:
                     lookup_table[hash_digest] = word
+                print(f'Processed {len(lookup_table)} words, skipped {skipped} ({skipped/len(lookup_table)*100.0:.2f}%)', end='\r', file=sys.stderr)
+    print('Skipped', skipped, 'invalid words from wordlist')
     return lookup_table
 
-def build_model_hibp(pwnedpasswords: str, wordlist: str) -> dict:
+def build_model_hibp(pwnedpasswords: str, wordlist: str, threads: int) -> dict:
     '''Build a Markov model from the Have I Been Pwned pwnedpasswords list and a wordlist file'''
     # Step 1 we read the wordlist and hash all of the words with sha1
     print('Building lookup table from wordlist...')
-    lookup_table = _build_wordlist_lookup_table(wordlist)
+    lookup_table = _build_wordlist_lookup_table(wordlist, threads)
     # Print first three entries
     print('Lookup table built with', len(lookup_table), 'entries')
     # Step 2 we read the pwnedpasswords file and build a model
     # The pwnedpasswords file is a list of sha1 hashes of passwords and their count
-    # The format is:
-    #   <sha1 hash>:<count>
+    # The format is <sha1 hash>:<count>
     model = {}
     print('Building model from pwnedpasswords...')
     number_missing = 0
@@ -108,10 +139,12 @@ def build_model_hibp(pwnedpasswords: str, wordlist: str) -> dict:
             # Check if the hash is in the lookup table
             if hash_bytes in lookup_table:
                 password = lookup_table[hash_bytes]
+                # The password is valid UTF8, but we can safely
+                # normalize it to help keep the model size down
+                password = unicodedata.normalize('NFC', password)
                 # Build the model from the password
                 _add_word_to_model(model, password, count)
             else:
-                # print(f'Hash not found in lookup table: {hash_str}')
                 number_missing += 1
     print('Model built with', len(model), 'entries')
     print('Number of missing hashes:', number_missing)
@@ -188,6 +221,9 @@ def _strength(model: dict, password: str, length_adjust: bool = False, fold: boo
     '''Return the strength of the password. This is -log2 of the product of the probabilities of each character'''
     # Check for repeating substrings
     password = flatten_repeating_substrings(password) if fold else password
+    # Normalize the password to NFC
+    password = unicodedata.normalize('NFC', password)
+    # Calculate the product of the probabilities of each character
     probabilities = []
     strength_val = 1
     for i in range(len(password) - 1):
@@ -260,8 +296,9 @@ def main():
         sub_parser.add_argument('pwnedpasswords', type=str, help='Pwned passwords file to read')
         sub_parser.add_argument('wordlist', type=str, help='Wordlist file to perform lookups')
         sub_parser.add_argument('model_file', type=str, help='Model file to write')
+        sub_parser.add_argument('--threads', type=int, help='Number of threads to use')
         args = sub_parser.parse_args(sys.argv[2:])
-        model = build_model_hibp(args.pwnedpasswords, args.wordlist)
+        model = build_model_hibp(args.pwnedpasswords, args.wordlist, args.threads)
         save_model(model, args.model_file)
     elif args.operation == 'report':
         # Create new arg parser for remainder of arguments
