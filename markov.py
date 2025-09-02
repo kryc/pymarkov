@@ -28,6 +28,16 @@ def _convert_counts_to_weights(model: dict) -> dict:
             next_chars[next_char] /= total
     return model
 
+def _denoise_model(model: dict, threshold: int) -> dict:
+    '''Denoise the model in place by removing entries with counts at or below the threshold'''
+    for char in list(model.keys()):
+        next_chars = model[char]
+        for next_char in list(next_chars.keys()):
+            if next_chars[next_char] <= threshold:
+                del next_chars[next_char]
+        if not next_chars:
+            del model[char]
+
 def _add_word_to_model(model: dict, word: str, weight: int) -> None:
     '''Add a word to the model, updating the counts of next characters'''
     for i in range(len(word) - 1):
@@ -54,7 +64,17 @@ def _is_printable_utf8(word: str) -> bool:
             return False
     return True
 
-def build_model(filename: str) -> dict:
+def _unhex(word: str) -> str:
+    '''Helper function to decode $HEX[...] encodings'''
+    if re.match(HEX_REGEX, word):
+        word_bytes = bytes.fromhex(word[5:-1])
+        try:
+            return word_bytes.decode('utf8')
+        except UnicodeDecodeError:
+            return None
+    return word
+
+def build_model(filename: str, denoise: int) -> dict:
     '''Build a Markov model from a file of newline-separated passwords'''
     model = {}
     # Read each word in the file and build the counts
@@ -65,19 +85,21 @@ def build_model(filename: str) -> dict:
             if not line:
                 continue
             # Decode $HEX[...] encodings
-            if re.match(HEX_REGEX, word):
-                word_bytes = bytes.fromhex(word[5:-1])
-                try:
-                    word = word_bytes.decode('utf8')
-                except UnicodeDecodeError:
-                    skipped += 1
-                    continue
+            word = _unhex(line)
+            if word is None:
+                continue
             # Check if the word is printable UTF-8
             if not _is_printable_utf8(line):
                 continue
             # Normalize the word to NFC
             line = unicodedata.normalize('NFC', line)
             _add_word_to_model(model, line, 1)
+    print('Model built with', len(model), 'entries')
+    # Denoise the model if required
+    if denoise:
+        print('Denoising model with threshold', denoise)
+        _denoise_model(model, denoise)
+        print('Model denoised to', len(model), 'entries')
     # Convert counts to probabilities weights
     model = _convert_counts_to_weights(model)
     return model
@@ -92,13 +114,10 @@ def _hashing_worker(words: list) -> tuple:
             skipped += 1
             continue
         # Decode $HEX[...] encodings
-        if re.match(HEX_REGEX, word):
-            word_bytes = bytes.fromhex(word[5:-1])
-            try:
-                word = word_bytes.decode('utf8')
-            except UnicodeDecodeError:
-                skipped += 1
-                continue
+        word = _unhex(word)
+        if word is None:
+            skipped += 1
+            continue
         # Skip non-printable UTF-8 words
         if not _is_printable_utf8(word):
             skipped += 1
@@ -122,7 +141,7 @@ def _build_wordlist_lookup_table(wordlist: str, threads: int) -> dict:
     print('Skipped', skipped, 'invalid words from wordlist')
     return lookup_table
 
-def build_model_hibp(pwnedpasswords: str, wordlist: str, threads: int) -> dict:
+def build_model_hibp(pwnedpasswords: str, wordlist: str, denoise: int, threads: int) -> dict:
     '''Build a Markov model from the Have I Been Pwned pwnedpasswords list and a wordlist file'''
     # Step 1 we read the wordlist and hash all of the words with sha1
     print('Building lookup table from wordlist...')
@@ -156,6 +175,11 @@ def build_model_hibp(pwnedpasswords: str, wordlist: str, threads: int) -> dict:
                 number_missing += 1
     print('Model built with', len(model), 'entries')
     print('Number of missing hashes:', number_missing)
+    # Denoise the model if required
+    if denoise:
+        print('Denoising model with threshold', denoise)
+        _denoise_model(model, denoise)
+        print('Model denoised to', len(model), 'entries')
     # Convert counts to probabilities weights
     model = _convert_counts_to_weights(model)
     return model
@@ -173,7 +197,7 @@ def load_model(filename: str) -> dict:
 def augment_model(model: dict, filename: str, multiplier: int) -> dict:
     '''Augment the model with a local dictionary'''
     # Create a new weighting model from the file
-    augmentation_model = build_model(filename)
+    augmentation_model = build_model(filename, None)
     # Multiply the weights by the multiplier
     for char, next_chars in augmentation_model.items():
         for next_char, weight in next_chars.items():
@@ -284,32 +308,48 @@ def generate_text(model: dict, length: int, start: str) -> str:
         current_char = next_char
     return output
 
+def dirty_denoise_model(model: dict, threshold: int) -> dict:
+    '''Denoise the model by removing entries with counts at or below the threshold'''
+    for char in list(model.keys()):
+        if len(model[char]) <= threshold:
+            del model[char]
+    return model
+
 def main():
     '''Main function'''
     parser = argparse.ArgumentParser(description='Password Markov model analysis')
-    parser.add_argument('operation', type=str, choices=('build', 'buildhibp', 'report', 'strength', 'generate',), help='Action to perform')
+    parser.add_argument('operation', type=str, choices=('build', 'buildhibp', 'dirtydenoise', 'report', 'strength', 'generate',), help='Action to perform')
     args = parser.parse_args(sys.argv[1:2])
 
     if args.operation == 'build':
-        # Create new arg parser for remainder of arguments
         sub_parser = argparse.ArgumentParser(description='Password Markov model build')
         sub_parser.add_argument('filename', type=str, help='Password file to read')
         sub_parser.add_argument('model_file', type=str, help='Model file to write')
+        sub_parser.add_argument('--denoise', type=int, help='Denoising threshold')
         args = sub_parser.parse_args(sys.argv[2:])
-        model = build_model(args.filename)
+        model = build_model(args.filename, args.denoise)
         save_model(model, args.model_file)
     elif args.operation == 'buildhibp':
-        # Create new arg parser for remainder of arguments
         sub_parser = argparse.ArgumentParser(description='Password Markov model build from Have I Been Pwned pwnedpasswords list')
         sub_parser.add_argument('pwnedpasswords', type=str, help='Pwned passwords file to read')
         sub_parser.add_argument('wordlist', type=str, help='Wordlist file to perform lookups')
         sub_parser.add_argument('model_file', type=str, help='Model file to write')
+        sub_parser.add_argument('--denoise', type=int, help='Denoising threshold')
         sub_parser.add_argument('--threads', type=int, help='Number of threads to use')
         args = sub_parser.parse_args(sys.argv[2:])
-        model = build_model_hibp(args.pwnedpasswords, args.wordlist, args.threads)
+        model = build_model_hibp(args.pwnedpasswords, args.wordlist, args.denoise, args.threads)
         save_model(model, args.model_file)
+    elif args.operation == 'dirtydenoise':
+        # Perform "dirty" denoise on a model file
+        sub_parser = argparse.ArgumentParser(description='Password Markov model denoise')
+        sub_parser.add_argument('model_file', type=str, help='Model file to read')
+        sub_parser.add_argument('denoised_model_file', type=str, help='Denoised model file to write')
+        sub_parser.add_argument('denoise', type=int, help='Denoising threshold')
+        args = sub_parser.parse_args(sys.argv[2:])
+        model = load_model(args.model_file)
+        model = dirty_denoise_model(model, args.denoise)
+        save_model(model, args.denoised_model_file)
     elif args.operation == 'report':
-        # Create new arg parser for remainder of arguments
         sub_parser = argparse.ArgumentParser(description='Password Markov model report')
         sub_parser.add_argument('model_file', type=str, help='Model file to read')
         sub_parser.add_argument('report_file', type=str, help='Report file to write')
@@ -317,7 +357,6 @@ def main():
         model = load_model(args.model_file)
         report(model, args.report_file)
     elif args.operation == 'strength':
-        # Create new arg parser for remainder of arguments
         sub_parser = argparse.ArgumentParser(description='Password Markov model analyze')
         sub_parser.add_argument('model_file', type=str, help='Model file to read')
         sub_parser.add_argument('password', nargs='+', type=str, help='Password to analyze')
@@ -338,7 +377,6 @@ def main():
                 for bigram, probability in analyse(model, password):
                     print(f'  {bigram} {probability:.5f}')
     elif args.operation == 'generate':
-        # Create new arg parser for remainder of arguments
         sub_parser = argparse.ArgumentParser(description='Password Markov model generate')
         sub_parser.add_argument('model_file', type=str, help='Model file to read')
         sub_parser.add_argument('length', type=int, help='Length of password to generate')
