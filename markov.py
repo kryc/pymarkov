@@ -1,6 +1,5 @@
 import argparse
 import csv
-import hashlib
 import itertools
 import math
 import multiprocessing
@@ -104,8 +103,8 @@ def build_model(filename: str, denoise: int) -> dict:
     model = _convert_counts_to_weights(model)
     return model
 
-def _hashing_worker(words: list) -> tuple:
-    '''Worker function to hash a word and return its SHA1 digest and the word itself'''
+def _lookup_worker(words: list) -> tuple:
+    '''Worker function to unpack the <hash>:<word> lines'''
     hashes = []
     skipped = 0
     for word in words:
@@ -113,6 +112,7 @@ def _hashing_worker(words: list) -> tuple:
         if not word:
             skipped += 1
             continue
+        hash_str, word = word.split(':', 1)
         # Decode $HEX[...] encodings
         word = _unhex(word)
         if word is None:
@@ -122,8 +122,8 @@ def _hashing_worker(words: list) -> tuple:
         if not _is_printable_utf8(word):
             skipped += 1
             continue
-        # Hash the string and return it
-        hash_digest = hashlib.sha1(word.encode('utf8')).digest()
+        # Unhex the hash
+        hash_digest = bytes.fromhex(hash_str)
         hashes.append((hash_digest, word,))
     return hashes, skipped
 
@@ -133,11 +133,12 @@ def _build_wordlist_lookup_table(wordlist: str, threads: int) -> dict:
     skipped = 0
     with open(wordlist, 'rt', encoding='utf8', errors='ignore') as file:
         with multiprocessing.Pool(threads) as pool:
-            for values, skipped_block in pool.imap_unordered(_hashing_worker, itertools.batched(file, 8192)):
+            for values, skipped_block in pool.imap_unordered(_lookup_worker, itertools.batched(file, 16384)):
                 skipped += skipped_block
                 for hash_digest, word in values:
                     lookup_table[hash_digest] = word
-                print(f'Processed {len(lookup_table)} words, skipped {skipped} ({skipped/len(lookup_table)*100.0:.2f}%)', end='\r', file=sys.stderr)
+                print(f'Processed {len(lookup_table):,d} words, skipped {skipped} ({skipped/len(lookup_table)*100.0:.2f}%)', end='\r', file=sys.stderr)
+    print()
     print('Skipped', skipped, 'invalid words from wordlist')
     return lookup_table
 
@@ -310,8 +311,22 @@ def generate_text(model: dict, length: int, start: str) -> str:
 
 def dirty_denoise_model(model: dict, threshold: int) -> dict:
     '''Denoise the model by removing entries with counts at or below the threshold'''
+    # Find all characters that have counts at or below the threshold
+    cleanup = []
     for char in list(model.keys()):
         if len(model[char]) <= threshold:
+            cleanup.append(char)
+    # Remove all references to the characters from the model
+    for char in list(model.keys()):
+        next_chars = model[char]
+        for next_char in cleanup:
+            if next_char in next_chars:
+                del next_chars[next_char]
+        if not next_chars:
+            del model[char]
+    # Finally remove the characters from the model
+    for char in cleanup:
+        if char in model:
             del model[char]
     return model
 
