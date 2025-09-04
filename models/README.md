@@ -14,10 +14,11 @@ The passwords from the [haveibeenpwned](https://haveibeenpwned.com/) leaked pass
 The following are models based on the flat list of passwords in the hibp dataset.
 - [hibp](hibp.markov) - Flat list of passwords with no weighting or denoising.
 - [hibp-lite](hibp-lite.markov) - Flat list with denoise filter of 1.
-- [hibp-mini](hibp-mini.markov) - Flat list with denoise filter of 1000.
 
 ### Weighted
 The following are weighted based on the occurence of each password in the hibp dataset. For example, if a password was found in 1000 data leaks then its bigram weightings in the model are increased by that frequency. This creates a much more representative dataset for determining password strength.
 - [hibp-weighted](hibp-weighted.markov) - Weighted model based on occurence of each password.
 - [hibp-weighted-lite](hibp-weighted-lite.markov) - Weighted model with denoise filter of 1.
 - [hibp-weighted-mini](hibp-weighted-mini.markov) - Weighted model with denoise filter of 1000.
+- [hibp-weighted-micro](hibp-weighted-micro.markov) - Weighted model with denoise filter of 2500.
+- [hibp-weighted-nano](hibp-weighted-nano.markov) - Weighted model with denoise filter of 5000.
